@@ -7,7 +7,7 @@ DEFAULTS = {
     "work_start": "09:00", "work_end": "18:00", "lunch_start": "12:00",
     "lunch_end": "13:00", "weekdays": [0, 1, 2, 3, 4], "duration": 30,
     "remind_minutes": 10, "quiet_start": "22:00", "quiet_end": "08:00",
-    "agent_enabled": False, "auto_plan": False,
+    "agent_enabled": False, "auto_plan": False, "desktop_notifications": False,
 }
 DEFAULT_RULES = [
     {"id": "urgent", "name": "紧急事项优先", "keywords": "紧急,尽快,urgent,阻塞,截止,今天内", "priority": "high", "category": "工作", "enabled": True},

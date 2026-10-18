@@ -23,7 +23,7 @@ Docker 使用 `.env` 和 `compose.yaml`。环境文件不会进入镜像，凭�
 2. 配置 OAuth 同意界面；个人开发时使用测试发布状态，添加自己的邮箱为测试用户。
 3. 创建 Web application 类型的 OAuth 客户端。
 4. 添加精确匹配的回调地址 `http://localhost:8765/oauth/google/callback`。远程部署应使用实际 HTTPS 地址。
-5. 在本机环境设置 `GOOGLE_CLIENT_ID` 和 `GOOGLE_CLIENT_SECRET`，重启服务。
+5. 在“偏好设置 → 服务配置”填写客户端 ID 和密钥，立即生效；也可使用 `GOOGLE_CLIENT_ID` 和 `GOOGLE_CLIENT_SECRET` 环境变量后重启服务。
 6. 解锁 Relay，在“连接中心 → Gmail”中发起授权，检查 Google 授权页面上的只读权限。
 7. 返回工作区后点击“同步消息”，或等待下一轮自动同步。
 
@@ -40,6 +40,8 @@ python run.py
 同步策略：首次查询最近 7 天收件箱，每页 100 条、每轮最多 10 页，分页检查点在成功写入消息后保存；每种来源按账号和消息 ID 去重。后续带 60 秒重叠窗口继续同步。此版本使用轮询，不实现 Gmail History 或删除事件同步；早于导入窗口的历史邮件不会自动导入。若 Google 使分页令牌过期，可断开后重新授权并从最近 7 天重建同步窗口。
 
 官方资料：[OAuth Web Server](https://developers.google.com/identity/protocols/oauth2/web-server)、[Gmail scopes](https://developers.google.com/workspace/gmail/api/auth/scopes)。
+
+桌面版会在系统浏览器中完成 Google 授权，请在浏览器中使用相同的本地工作区密码登录。内嵌窗口和系统浏览器的会话 Cookie 分开，不会把登录令牌放进跳转链接；授权完成后桌面窗口会刷新连接状态。
 
 ## QQ 邮箱：专用授权码与 IMAP TLS
 

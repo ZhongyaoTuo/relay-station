@@ -29,6 +29,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .connectors import agent_analyze, gmail_sync, push_feishu, qq_sync, verify_feishu
 from .engine import DEFAULT_RULES, DEFAULTS, classify, propose, quiet_now
 from .store import Store
+from . import __version__
 
 ROOT = Path(__file__).resolve().parent.parent
 PRIORITIES = ("high", "normal", "low")
@@ -51,6 +52,7 @@ class Settings(BaseModel):
     quiet_end: str = "08:00"
     agent_enabled: bool = False
     auto_plan: bool = False
+    desktop_notifications: bool = False
 
     @field_validator("work_start", "work_end", "lunch_start", "lunch_end", "quiet_start", "quiet_end")
     @classmethod
@@ -141,6 +143,24 @@ class PushConfig(BaseModel):
         return value
 
 
+class ServiceConfig(BaseModel):
+    google_client_id: str = Field(default="", max_length=512)
+    google_client_secret: str = Field(default="", max_length=4096)
+    agent_base_url: str = Field(default="", max_length=1000)
+    agent_api_key: str = Field(default="", max_length=8192)
+    agent_model: str = Field(default="", max_length=200)
+
+    @field_validator("agent_base_url")
+    @classmethod
+    def https_endpoint(cls, value):
+        if not value:
+            return value
+        parsed = urlsplit(value)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("Agent 地址须为不含用户名、查询参数的 HTTPS 基础地址")
+        return value.rstrip("/")
+
+
 def password_hash(password, salt):
     return hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=16384, r=8, p=1).hex()
 
@@ -170,6 +190,16 @@ def create_app(data_dir=None, origin=None, background=True):
 
     def settings():
         return dict(DEFAULTS, **store.get("settings", {}))
+
+    def service_value(key):
+        return store.get("services", {}).get(key.lower(), os.getenv(key.upper(), ""))
+
+    def public_services():
+        return {"google_client_id": service_value("google_client_id"),
+                "google_client_secret_set": bool(service_value("google_client_secret")),
+                "agent_base_url": service_value("agent_base_url"),
+                "agent_model": service_value("agent_model"),
+                "agent_api_key_set": bool(service_value("agent_api_key"))}
 
     def set_status(source, state, error=None):
         store.set("status:" + source, {"state": state, "last_sync": now().isoformat(), "error": error})
@@ -236,7 +266,7 @@ def create_app(data_dir=None, origin=None, background=True):
                     if source == "qqmail":
                         messages, cursor = await asyncio.to_thread(qq_sync, config, store.get("cursor:qqmail"))
                     else:
-                        messages, cursor = await gmail_sync(store, os.getenv("GOOGLE_CLIENT_ID", ""), os.getenv("GOOGLE_CLIENT_SECRET", ""))
+                        messages, cursor = await gmail_sync(store, service_value("google_client_id"), service_value("google_client_secret"))
                     counts[source] = sum(ingest(source, message) for message in messages)
                     store.set("cursor:" + source, cursor)
                     set_status(source, "connected")
@@ -307,7 +337,7 @@ def create_app(data_dir=None, origin=None, background=True):
             with suppress(asyncio.CancelledError):
                 await task
 
-    app = FastAPI(title="Relay Station", version="0.1.0", lifespan=lifespan,
+    app = FastAPI(title="Relay Station", version=__version__, lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
     app.state.ingest = ingest
@@ -406,8 +436,22 @@ def create_app(data_dir=None, origin=None, background=True):
             "settings": settings(), "rules": store.get("rules", DEFAULT_RULES), "timezone": timezone_name,
             "push_configured": bool(store.get("push:feishu")), "failed_deliveries": failed,
             "worker_error": store.get("worker_error"),
-            "agent_configured": bool(os.getenv("AGENT_BASE_URL") and os.getenv("AGENT_API_KEY") and os.getenv("AGENT_MODEL")),
-            "google_configured": bool(os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET"))}
+            "agent_configured": bool(service_value("agent_base_url") and service_value("agent_api_key") and service_value("agent_model")),
+            "google_configured": bool(service_value("google_client_id") and service_value("google_client_secret"))}
+
+    @app.get("/api/services")
+    def services(_=Depends(get_session)):
+        return public_services()
+
+    @app.put("/api/services")
+    def update_services(body: ServiceConfig, _=Depends(get_session)):
+        value = body.model_dump()
+        # Empty secret fields mean keep the existing value, including env fallback.
+        for key in ("google_client_secret", "agent_api_key"):
+            if not value[key]:
+                value[key] = service_value(key)
+        store.set("services", value)
+        return public_services()
 
     @app.patch("/api/messages/{ident}")
     def patch_message(ident: str, body: MessagePatch, _=Depends(get_session)):
@@ -553,9 +597,9 @@ def create_app(data_dir=None, origin=None, background=True):
 
     @app.post("/api/connectors/gmail/authorize")
     def authorize(key=Depends(get_session)):
-        client_id = os.getenv("GOOGLE_CLIENT_ID")
-        if not client_id or not os.getenv("GOOGLE_CLIENT_SECRET"):
-            raise HTTPException(400, "请先设置 GOOGLE_CLIENT_ID 和 GOOGLE_CLIENT_SECRET，见接入文档")
+        client_id = service_value("google_client_id")
+        if not client_id or not service_value("google_client_secret"):
+            raise HTTPException(400, "请先在偏好设置的服务配置中填写 Google OAuth 客户端信息")
         state = secrets.token_urlsafe(32)
         verifier = secrets.token_urlsafe(64)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
@@ -577,7 +621,7 @@ def create_app(data_dir=None, origin=None, background=True):
         try:
             async with httpx.AsyncClient(timeout=25) as client:
                 response = await client.post("https://oauth2.googleapis.com/token", data={
-                    "client_id": os.getenv("GOOGLE_CLIENT_ID"), "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+                    "client_id": service_value("google_client_id"), "client_secret": service_value("google_client_secret"),
                     "code": request.query_params["code"], "redirect_uri": origin+"/oauth/google/callback",
                     "grant_type": "authorization_code", "code_verifier": pending["verifier"]})
                 response.raise_for_status()
@@ -636,7 +680,7 @@ def create_app(data_dir=None, origin=None, background=True):
     async def analyze(ident: str, _=Depends(get_session)):
         if not settings()["agent_enabled"]:
             raise HTTPException(403, "请先在设置中允许所选消息发送给 Agent 服务")
-        base_url, api_key, model = (os.getenv(k, "") for k in ("AGENT_BASE_URL", "AGENT_API_KEY", "AGENT_MODEL"))
+        base_url, api_key, model = (service_value(k) for k in ("agent_base_url", "agent_api_key", "agent_model"))
         if not all((base_url, api_key, model)):
             raise HTTPException(400, "请先在服务端配置 Agent 地址、密钥和模型名称")
         message = next((m for m in store.messages() if m["id"] == ident), None)
@@ -651,7 +695,7 @@ def create_app(data_dir=None, origin=None, background=True):
 
     @app.get("/health")
     def health():
-        return {"ok": True, "version": "0.1.0"}
+        return {"ok": True, "version": __version__}
 
     @app.get("/")
     def index():

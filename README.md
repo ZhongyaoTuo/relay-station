@@ -8,10 +8,11 @@
 
 ## 当前版本能做什么
 
-这是可运行的 **v0.1 MVP**，适合个人本地部署和继续开发。页面中的演示账号和消息不会建立真实连接。
+这是可运行的 **v0.2 MVP**，适合个人本地部署和继续开发。页面中的演示账号和消息不会建立真实连接。
 
 | 能力 | 实现状态 | 接入条件 / 边界 |
 | --- | --- | --- |
+| Windows 独立窗口、托盘、桌面通知 | 已实现 | 单文件 exe；无需 Python；WebView2 或浏览器回退 |
 | 中文界面、统一收件箱、搜索、来源筛选 | 已实现 | 桌面 / 手机适配；演示模式与真实工作区分离 |
 | Gmail 收件箱 | 已实现适配器 | 用户自行创建 Google OAuth 应用；只读；每两分钟轮询 |
 | QQ 邮箱 | 已实现适配器 | 专用授权码 + IMAP over TLS；不是 QQ 账号密码 |
@@ -29,9 +30,21 @@
 
 第三方账号未在开发环境实际授权，适配器通过官方协议实现并使用模拟服务测试；不能把演示数据或通过测试理解为平台账号已接通。
 
-## 快速开始
+## Windows 桌面版（推荐）
 
-需要 **Python 3.11+**。前端是原生 HTML / CSS / JavaScript，不需要 Node.js，也没有 CDN、远程字体或统计脚本。
+直接到 [GitHub Releases](https://github.com/ZhongyaoTuo/relay-station/releases/latest) 下载 **Relay Windows x64** 发行包，解压后双击 `Relay.exe`。无需安装 Python、Node.js 或 Docker。
+
+- 独立中文窗口、首次使用引导、系统托盘与桌面通知。
+- 关闭窗口后可继续同步；从托盘“退出并停止提醒”完全结束。
+- Gmail / Agent 服务可在界面中配置，不再要求填写环境变量。
+- 数据保存在 `%LOCALAPPDATA%\RelayStation`，移动 / 更新 exe 不影响工作区。
+- 优先使用 WebView2；内嵌窗口不可用时尝试浏览器模式。
+
+见 [桌面版使用与构建说明](docs/WINDOWS.md)。本机已验证真实 exe 的启动、窗口、表单、托盘与重启后数据保留；平台账号授权仍需要用户自己的配置。
+
+## 源码与 Docker 快速开始
+
+以下步骤适用于源码部署；exe 用户可跳过。需要 **Python 3.11+**。前端是原生 HTML / CSS / JavaScript，不需要 Node.js，也没有 CDN、远程字体或统计脚本。
 
 ### Windows
 
@@ -99,7 +112,7 @@ Windows 可使用 `Copy-Item .env.example .env`。默认只将端口发布到本
 
 ## 可选 Agent API
 
-通过服务端环境变量配置：
+推荐在“偏好设置 → 服务配置”中填写地址、模型和密钥，保存后立即生效。空白密钥字段会保留已有值，已保存密钥不回显。也可以通过服务端环境变量配置：
 
 ```powershell
 $env:AGENT_BASE_URL = 'https://your-provider.example/v1'
@@ -112,12 +125,14 @@ python run.py
 
 在偏好设置开启允许后，打开消息详情，点击“Agent 分析”。只发送该消息标题的前 500 字符和正文的前 6000 字符，返回摘要、分类与优先级建议；用户确认后才改变本地分类。没有模型工具调用、代码执行或由消息文本控制的外部操作。
 
+界面保存的配置优先于同名环境变量。修改客户端信息不会自动删除已连接账号的令牌，必要时断开后重新授权。
+
 当前复杂工作流可基于 `app/connectors.py` 中的适配器继续扩展。基础分类、计划生成、日程持久化与提醒均无需 Agent。
 
 ## 数据与安全设计
 
 - 账号凭据、消息/日程内容、设置等用 Fernet 认证加密后写入 SQLite。消息 ID、来源、计划时间、提醒状态等索引保留明文。
-- 原生数据默认位于项目下 `data/`；可使用 `RELAY_DATA_DIR` 指定独立目录。`vault.key` 与数据库分开保存，但同属本机，不能抵御整台设备被控制的情况。
+- 桌面版默认位于 `%LOCALAPPDATA%\RelayStation`；源码版原生数据默认位于项目下 `data/`；可使用 `RELAY_DATA_DIR` 指定独立目录。`vault.key` 与数据库分开保存，但同属本机，不能抵御整台设备被控制的情况。
 - 管理密码使用带随机盐的 scrypt；会话令牌仅存在服务端内存，通过 HttpOnly、SameSite Cookie 传递；会话 12 小时失效，重启服务需重新登录。
 - 写接口检查 Origin、自定义请求头与 CSRF Token；限制请求体大小、允许的 Host、登录尝试频率；界面不渲染外部消息 HTML，不加载邮件远程图片。
 - 日程、提醒与推送重试记录持久化，服务重启后继续处理。邮箱每 120 秒轮询，排程与飞书推送每 15 秒检查。
@@ -138,6 +153,8 @@ app/
   engine.py        # 本地分类、免打扰判断和无冲突排程
   connectors.py    # Gmail、QQ 邮箱、飞书与 Agent 适配器
 static/            # 原生中文界面，无前端构建依赖
+desktop.py         # Windows 窗口、托盘、单实例和后台运行
+Relay.spec         # PyInstaller 单文件打包
 tests/             # 授权、加密、排程、连接器和投递测试
 docs/              # 接入、架构和研究资料
 compose.yaml       # 单实例 Docker 部署
@@ -152,7 +169,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-可选使用 Node.js 检查前端语法：`node --check static/app.js`。GitHub Actions 在 Windows / Linux、Python 3.11 / 3.13 上执行测试，并验证 Docker 镜像启动。
+可选使用 Node.js 检查前端语法：`node --check static/app.js`。GitHub Actions 在 Windows / Linux、Python 3.11 / 3.13 上执行测试，并验证 Docker 镜像启动；还会构建 exe 并移除 Python PATH 后验证打包产物。
 
 ## 已有工作与参考
 

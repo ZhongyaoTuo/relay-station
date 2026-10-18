@@ -9,3 +9,6 @@
 *.yml text eol=lf
 *.md text eol=lf
 *.png binary
+*.ico binary
+# Preserve upstream notices exactly, including their whitespace.
+packaging/THIRD_PARTY_LICENSES.txt -whitespace
