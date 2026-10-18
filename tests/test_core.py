@@ -159,11 +159,12 @@ def test_manual_tasks_validate_timezone_conflict_and_lifecycle(app, client):
     assert not client.get("/api/state").json()["tasks"]
 
 
-def test_quiet_hours_reminders_and_ack(app, client):
+def test_quiet_hours_reminders_and_ack(app, client, monkeypatch):
     ingest(app)
-    hour = datetime.now().strftime("%H:%M")
+    monkeypatch.setattr("app.main.quiet_now", lambda *_: True)
     app.state.store.set("settings", {**DEFAULTS, "quiet_start": "00:00", "quiet_end": "23:59"})
     assert client.get("/api/reminders").json() == []
+    monkeypatch.setattr("app.main.quiet_now", lambda *_: False)
     app.state.store.set("settings", {**DEFAULTS, "quiet_start": "00:00", "quiet_end": "00:00"})
     reminders = client.get("/api/reminders").json()
     assert len(reminders) == 1

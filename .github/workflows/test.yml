@@ -26,4 +26,6 @@ jobs:
       - uses: actions/checkout@v4
       - run: docker build -t relay-test .
       - run: docker run -d --name relay-test -p 127.0.0.1:8765:8765 -e RELAY_ADMIN_PASSWORD=ci-only-disposable-password relay-test
-      - run: curl --retry 10 --retry-connrefused --retry-delay 2 --fail http://localhost:8765/health
+      - run: curl --retry 10 --retry-all-errors --retry-delay 2 --max-time 5 --fail http://localhost:8765/health
+      - if: failure()
+        run: docker logs relay-test
