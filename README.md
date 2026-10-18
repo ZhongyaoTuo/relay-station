@@ -6,6 +6,8 @@
 
 ![Relay 中文工作台](docs/overview.png)
 
+[完整技术文档](docs/TECHNICAL.md) · [产品与算法](docs/ORGANIZER.md) · [授权接入](docs/INTEGRATIONS.md) · [Windows 使用](docs/WINDOWS.md)
+
 ## 当前版本能做什么
 
 这是可运行的 **v0.3 MVP**，适合个人本地部署和继续开发。页面中的演示账号和消息不会建立真实连接。
@@ -37,6 +39,8 @@
 ## Windows 桌面版（推荐）
 
 直接到 [GitHub Releases](https://github.com/ZhongyaoTuo/relay-station/releases/latest) 下载 **Relay Windows x64** 发行包，解压后双击 `Relay.exe`。无需安装 Python、Node.js 或 Docker。
+
+推荐下载 `Relay-0.3.0-complete.zip` 完整交付包，内含 exe、源码快照、技术文档、使用说明与校验文件。原有单独 exe 和轻量发行包继续提供。
 
 - 独立中文窗口、首次使用引导、系统托盘与桌面通知。
 - 关闭窗口后可继续同步；从托盘“退出并停止提醒”完全结束。

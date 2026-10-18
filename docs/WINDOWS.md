@@ -4,6 +4,8 @@
 
 在 [GitHub Releases](https://github.com/ZhongyaoTuo/relay-station/releases) 下载 Windows x64 发行包，解压后双击 `Relay.exe`。无需安装 Python、Node.js 或 Docker，也不需要管理员权限。
 
+完整交付包 `Relay-0.3.0-complete.zip` 还包含源码快照、技术文档、接入说明、许可证与构建来源记录。技术实现与完整包构建见 [TECHNICAL.md](TECHNICAL.md)。
+
 桌面界面使用 Microsoft Edge WebView2 Runtime。已在本机 Windows 10 x64 上验证；Windows 10 / 11 x64 为预期支持范围。若设备缺少 WebView2 或内嵌窗口启动失败，程序会尝试使用系统浏览器，并保留一个本地启动窗口。WebView2 由 Microsoft 提供，不包含在 35 MB 左右的单文件程序内。
 
 本发行版没有商业代码签名证书。请从本项目 Releases 下载，并使用发行包提供的 SHA-256 文件校验文件；不要关闭系统防护。
