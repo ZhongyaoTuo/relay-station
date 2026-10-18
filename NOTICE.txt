@@ -1,4 +1,4 @@
-Relay Station 0.2.0
+Relay Station 0.3.0
 Copyright 2026 Relay Station contributors. MIT License.
 
 This Windows distribution bundles Python and third-party open-source libraries.

@@ -35,3 +35,8 @@
 - Docker 镜像在目标设备上的运行与 HTTPS 反向代理配置。
 
 测试使用合成的加密事件和模拟平台响应；不会拿公开演示内容冒充真实接入结果。
+
+
+## 备忘与学生场景补充
+
+[Super Productivity](https://github.com/super-productivity/super-productivity)（MIT）将外部任务整合与时间安排结合，可借鉴其将收集、确认和工作时段分开的交互方式。本项目的备忘评分、遗漏检查和课表避让独立实现，未复制该项目代码。Canvas 集成按官方 [Assignments](https://developerdocs.instructure.com/services/canvas/resources/assignments) 与 [Calendar Events](https://developerdocs.instructure.com/services/canvas/resources/calendar_events) 文档实现；课程日历每请求最多 10 个 context code，因此适配器分组读取。

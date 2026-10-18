@@ -39,6 +39,8 @@ def client(app):
 
 
 def ingest(app, ident="one", title="紧急：请确认交付"):
+    # These legacy message-delivery tests explicitly opt into raw-message alerts.
+    app.state.store.set("organizer_profile", {"notify_messages": True})
     return app.state.ingest("qqmail", {"external_id": ident, "title": title,
         "sender": "test@example.test", "body": "请核对本周工作事项。这是保密正文。"})
 

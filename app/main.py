@@ -30,6 +30,9 @@ from .connectors import agent_analyze, gmail_sync, push_feishu, qq_sync, verify_
 from .engine import DEFAULT_RULES, DEFAULTS, classify, propose, quiet_now
 from .store import Store
 from . import __version__
+from .organizer import Organizer, profile as organizer_profile
+from .organizer_api import register as register_organizer
+from .canvas import Canvas
 
 ROOT = Path(__file__).resolve().parent.parent
 PRIORITIES = ("high", "normal", "low")
@@ -106,6 +109,7 @@ class TaskInput(BaseModel):
     start: datetime
     end: datetime
     message_id: str | None = Field(default=None, max_length=64)
+    item_id: str | None = Field(default=None, max_length=64)
     priority: str = "normal"
     source: str = "manual"
 
@@ -201,6 +205,8 @@ def create_app(data_dir=None, origin=None, background=True):
                 "agent_model": service_value("agent_model"),
                 "agent_api_key_set": bool(service_value("agent_api_key"))}
 
+    organizer=Organizer(store,timezone_name,settings)
+
     def set_status(source, state, error=None):
         store.set("status:" + source, {"state": state, "last_sync": now().isoformat(), "error": error})
 
@@ -215,11 +221,13 @@ def create_app(data_dir=None, origin=None, background=True):
         with store.connect() as db:
             count = db.execute("INSERT OR IGNORE INTO messages VALUES (?,?,?,?,?)", (
                 ident, source, message["external_id"], timestamp, store.encrypt(message))).rowcount
-            if count and message["priority"] == "high":
+            if count and message["priority"] == "high" and organizer_profile(store)["notify_messages"]:
                 reminder = {"id": "msg:"+ident, "title": "重点消息：" + message["title"], "source": source,
                             "due": timestamp, "message_id": ident, "kind": "message"}
                 db.execute("INSERT INTO reminders (id,due,payload) VALUES (?,?,?)",
                            (reminder["id"], timestamp, store.encrypt(reminder)))
+        if count:
+            organizer.capture(message)
         return count
 
     def save_tasks(values):
@@ -228,6 +236,7 @@ def create_app(data_dir=None, origin=None, background=True):
             db.execute("BEGIN IMMEDIATE")
             existing = store.tasks()
             message_ids = {m["id"] for m in store.messages()}
+            items={i["id"]:i for i in store.items()}
             for value in values:
                 data = TaskInput(**value)
                 # Store all schedule indexes in UTC so lexicographic queries are reliable.
@@ -235,7 +244,22 @@ def create_app(data_dir=None, origin=None, background=True):
                 end = data.end.astimezone(timezone.utc).isoformat()
                 if data.message_id and data.message_id not in message_ids:
                     raise HTTPException(404, "关联消息不存在")
+                if data.item_id and data.item_id not in items:
+                    raise HTTPException(404,"关联事项不存在")
+                if data.item_id:
+                    item=items[data.item_id]
+                    if item["status"] not in ("todo","doing") or item["verification"]!="confirmed" or not item["include_in_plan"]:
+                        raise HTTPException(409,"事项已变更，请重新确认并生成计划")
+                    if (data.end-data.start).total_seconds()!=item["estimated_minutes"]*60 or data.title!=item["title"]:
+                        raise HTTPException(409,"事项内容或准备时长已变更，请重新生成计划")
+                    if item.get("due_at") and data.end>datetime.fromisoformat(item["due_at"])-timedelta(minutes=item["buffer_minutes"]):
+                        raise HTTPException(409,"该安排超出事项截止缓冲，请重新生成计划")
+                for block in store.blocks():
+                    if block["enabled"] and data.start<datetime.fromisoformat(block["end"]) and data.end>datetime.fromisoformat(block["start"]):
+                        raise HTTPException(409,"该时段有课程或固定安排，请调整时间")
                 for task in existing + saved:
+                    if data.item_id and data.item_id==task.get("item_id"):
+                        raise HTTPException(409,"这项备忘已安排日程")
                     if data.message_id and data.message_id == task.get("message_id"):
                         raise HTTPException(409, "这条消息已安排日程")
                     if task.get("done"):
@@ -243,11 +267,11 @@ def create_app(data_dir=None, origin=None, background=True):
                     if data.start < datetime.fromisoformat(task["end"]) and data.end > datetime.fromisoformat(task["start"]):
                         raise HTTPException(409, "时间已被占用，请重新生成计划或调整时间")
                 task = dict(data.model_dump(mode="json"), id=uuid.uuid4().hex, start=start, end=end, done=False)
-                db.execute("INSERT INTO tasks (id,message_id,start,end,payload) VALUES (?,?,?,?,?)", (
-                    task["id"], data.message_id, start, end, store.encrypt(task)))
+                db.execute("INSERT INTO tasks (id,message_id,item_id,start,end,payload) VALUES (?,?,?,?,?,?)", (
+                    task["id"], data.message_id, data.item_id, start, end, store.encrypt(task)))
                 due = (data.start - timedelta(minutes=settings()["remind_minutes"])).astimezone(timezone.utc).isoformat()
                 reminder = {"id": "task:"+task["id"], "task_id": task["id"], "title": "日程提醒："+task["title"],
-                            "due": due, "source": data.source, "kind": "task"}
+                            "due": due, "source": data.source, "kind": "task", "item_id":data.item_id}
                 db.execute("INSERT INTO reminders (id,task_id,due,payload) VALUES (?,?,?,?)", (
                     reminder["id"], task["id"], due, store.encrypt(reminder)))
                 saved.append(task)
@@ -258,11 +282,30 @@ def create_app(data_dir=None, origin=None, background=True):
             return {"busy": True}
         counts = {}
         async with sync_lock:
-            for source in ("qqmail", "gmail"):
+            for source in ("qqmail", "gmail", "canvas"):
+                if not organizer_profile(store)["sources"].get(source,{}).get("enabled",True):
+                    continue
                 config = store.get("connector:" + source)
                 if not config:
                     continue
                 try:
+                    if source=="canvas":
+                        effective={**config,"sync_assignments":config.get("sync_assignments",True) and organizer_profile(store)["sources"][source]["capture"]}
+                        result=await Canvas(effective).sync()
+                        for assignment in result["assignments"]:
+                            organizer.canvas_assignment(assignment)
+                        for block in result["blocks"]:
+                            organizer.upsert_block(block,block["external_key"])
+                        if config.get("sync_calendar") and not result["truncated"]:
+                            from datetime import timezone as utc_timezone
+                            current=datetime.now(utc_timezone.utc)
+                            keys={b["external_key"] for b in result["blocks"]}
+                            for old in store.blocks():
+                                if old["external_key"].startswith("canvas:"+config["base_url"]+":") and current<=datetime.fromisoformat(old["start"])<=current+timedelta(days=14) and old["external_key"] not in keys:
+                                    organizer.upsert_block({**old,"enabled":False},old["external_key"])
+                        counts[source]=len(result["assignments"])
+                        set_status(source,"connected","本轮达到分页或课程数量上限，请缩小课程范围" if result["truncated"] else None)
+                        continue
                     if source == "qqmail":
                         messages, cursor = await asyncio.to_thread(qq_sync, config, store.get("cursor:qqmail"))
                     else:
@@ -282,13 +325,27 @@ def create_app(data_dir=None, origin=None, background=True):
             return []
         with store.connect() as db:
             rows = db.execute("SELECT payload FROM reminders WHERE acknowledged=0 ORDER BY due").fetchall()
-        return [r for row in rows if datetime.fromisoformat((r := store.decrypt(row[0]))["due"]) <= now()]
+        items={i["id"]:i for i in store.items()}
+        due=[]
+        for row in rows:
+            reminder=store.decrypt(row[0])
+            if datetime.fromisoformat(reminder["due"])>now():
+                continue
+            if reminder.get("item_id"):
+                item=items.get(reminder["item_id"])
+                if not item or item["status"] in ("done","dismissed","inbox") or item["verification"]!="confirmed" or item["remind_mode"]!="deadline":
+                    continue
+                reminder["notify_feishu"]=item.get("notify_feishu",False)
+            due.append(reminder)
+        return due
 
     async def deliver_reminders():
         push = store.get("push:feishu")
         if not push:
             return
         for reminder in due_reminders():
+            if (reminder.get("item_id") or reminder.get("kind") in ("item","digest","class")) and not reminder.get("notify_feishu",False):
+                continue
             with store.connect() as db:
                 db.execute("INSERT OR IGNORE INTO deliveries (reminder_id,channel) VALUES (?,?)", (reminder["id"], "feishu"))
                 record = db.execute("SELECT * FROM deliveries WHERE reminder_id=? AND channel='feishu'", (reminder["id"],)).fetchone()
@@ -311,10 +368,11 @@ def create_app(data_dir=None, origin=None, background=True):
                     await sync_sources()
                     next_sync = time.time() + 120
                 if settings()["auto_plan"]:
-                    proposal = propose(store.messages(), store.tasks(), settings(), timezone_name)
+                    proposal = organizer.plan()
                     if proposal["tasks"]:
                         save_tasks(proposal["tasks"])
                 await deliver_reminders()
+                organizer.digest()
                 with store.connect() as db:
                     db.execute("DELETE FROM receipts WHERE expires<?", (time.time(),))
                 for key in list(sessions):
@@ -344,6 +402,7 @@ def create_app(data_dir=None, origin=None, background=True):
     app.state.save_tasks = save_tasks
     app.state.sync_sources = sync_sources
     app.state.deliver_reminders = deliver_reminders
+    app.state.organizer=organizer
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[parsed_origin.hostname, "localhost", "127.0.0.1"])
 
     @app.middleware("http")
@@ -425,14 +484,19 @@ def create_app(data_dir=None, origin=None, background=True):
     @app.get("/api/state")
     def state(_=Depends(get_session)):
         connectors = []
-        for ident, name, mode in [("gmail", "Gmail", "OAuth 2.0 · 只读"), ("qqmail", "QQ 邮箱", "IMAP TLS · 专用授权码"), ("feishu", "飞书", "企业应用 · 加密事件"), ("wechat", "微信 / 企业微信", "待实现企业微信适配器"), ("qq", "QQ 机器人", "待实现官方机器人适配器")]:
+        for ident, name, mode in [("gmail", "Gmail", "OAuth 2.0 · 只读"), ("qqmail", "QQ 邮箱", "IMAP TLS · 专用授权码"), ("feishu", "飞书", "企业应用 · 加密事件"), ("canvas","Canvas / 学校作业","授权令牌 · 只读接口"), ("wechat", "微信 / 企业微信", "待实现企业微信适配器"), ("qq", "QQ 机器人", "待实现官方机器人适配器")]:
             connected = bool(store.get("connector:"+ident))
             connectors.append({"id": ident, "name": name, "mode": mode,
                 "configured": connected, "status": store.get("status:"+ident, {"state": "configured" if connected else "disconnected"}),
-                "available": ident in ("gmail", "qqmail", "feishu")})
+                "available": ident in ("gmail", "qqmail", "feishu", "canvas")})
         with store.connect() as db:
             failed = db.execute("SELECT COUNT(*) FROM deliveries WHERE attempts>=5 AND delivered=0").fetchone()[0]
+        memo_items=organizer.decorated()
+        canvas=store.get("connector:canvas",{})
         return {"messages": store.messages(), "tasks": store.tasks(), "connectors": connectors,
+            "items":memo_items,"gaps":organizer.gaps(memo_items),"blocks":store.blocks(),"profile":organizer_profile(store),
+            "canvas":{"base_url":canvas.get("base_url",""),"courses":canvas.get("courses",[]),"course_ids":canvas.get("course_ids",[]),
+                      "sync_assignments":canvas.get("sync_assignments",True),"sync_calendar":canvas.get("sync_calendar",False)},
             "settings": settings(), "rules": store.get("rules", DEFAULT_RULES), "timezone": timezone_name,
             "push_configured": bool(store.get("push:feishu")), "failed_deliveries": failed,
             "worker_error": store.get("worker_error"),
@@ -469,6 +533,10 @@ def create_app(data_dir=None, origin=None, background=True):
             if not row:
                 raise HTTPException(404, "消息不存在")
             value = dict(store.decrypt(row[0]), **changes)
+            if "priority" in changes:
+                value["priority_manual"]=True
+            if "category" in changes:
+                value["category_manual"]=True
             db.execute("UPDATE messages SET payload=? WHERE id=?", (store.encrypt(value), ident))
             if value.get("archived") or value.get("read"):
                 db.execute("UPDATE reminders SET acknowledged=1 WHERE id=?", ("msg:"+ident,))
@@ -494,13 +562,18 @@ def create_app(data_dir=None, origin=None, background=True):
     def reclassify(_=Depends(get_session)):
         with store.connect() as db:
             for message in store.messages():
-                message.update(classify(message["title"], message["body"], store.get("rules", DEFAULT_RULES)))
+                suggestion=classify(message["title"],message["body"],store.get("rules",DEFAULT_RULES))
+                if message.get("priority_manual"):
+                    suggestion.pop("priority",None)
+                if message.get("category_manual"):
+                    suggestion.pop("category",None)
+                message.update(suggestion)
                 db.execute("UPDATE messages SET payload=? WHERE id=?", (store.encrypt(message), message["id"]))
         return {"ok": True}
 
     @app.post("/api/plan")
     def plan(_=Depends(get_session)):
-        proposal = propose(store.messages(), store.tasks(), settings(), timezone_name)
+        proposal = propose(store.messages(), store.tasks()+[b for b in store.blocks() if b["enabled"]], settings(), timezone_name)
         ident = secrets.token_urlsafe(24)
         store.set("plan:"+ident, {**proposal, "expires": time.time()+600})
         return {"id": ident, **proposal}
@@ -585,7 +658,7 @@ def create_app(data_dir=None, origin=None, background=True):
 
     @app.delete("/api/connectors/{source}")
     async def disconnect(source: str, _=Depends(get_session)):
-        if source not in ("gmail", "qqmail", "feishu"):
+        if source not in ("gmail", "qqmail", "feishu", "canvas"):
             raise HTTPException(404, "未知渠道")
         if sync_lock.locked():
             raise HTTPException(409, "正在同步，请稍后再试")
@@ -655,6 +728,8 @@ def create_app(data_dir=None, origin=None, background=True):
             raise HTTPException(403, "事件验证失败") from None
         if event.get("type") == "url_verification":
             return {"challenge": event["challenge"]}
+        if not organizer_profile(store)["sources"]["feishu"]["enabled"]:
+            return {"ok":True,"paused":True}
         header = event.get("header", {})
         event_id = header.get("event_id")
         if not event_id:
@@ -701,5 +776,6 @@ def create_app(data_dir=None, origin=None, background=True):
     def index():
         return FileResponse(ROOT / "static" / "index.html")
 
+    register_organizer(app,organizer,get_session,save_tasks,sync_lock,sync_sources)
     app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
     return app

@@ -48,7 +48,16 @@ class Store:
                     delivered INTEGER DEFAULT 0, next_try REAL DEFAULT 0,
                     PRIMARY KEY(reminder_id, channel));
                 CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, expires REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS items (
+                    id TEXT PRIMARY KEY, dedupe_key TEXT UNIQUE NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, payload TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS busy_blocks (
+                    id TEXT PRIMARY KEY, external_key TEXT UNIQUE NOT NULL,
+                    start TEXT NOT NULL, end TEXT NOT NULL, payload TEXT NOT NULL);
             """)
+            if "item_id" not in {row[1] for row in db.execute("PRAGMA table_info(tasks)")}:
+                db.execute("ALTER TABLE tasks ADD COLUMN item_id TEXT")
+            db.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_task_per_item ON tasks(item_id) WHERE item_id IS NOT NULL")
 
     @contextmanager
     def connect(self):
@@ -92,3 +101,11 @@ class Store:
         with self.connect() as db:
             return [dict(self.decrypt(r["payload"]), done=bool(r["done"])) for r in db.execute(
                 "SELECT * FROM tasks ORDER BY start")]
+
+    def items(self):
+        with self.connect() as db:
+            return [self.decrypt(row[0]) for row in db.execute("SELECT payload FROM items ORDER BY updated_at DESC LIMIT 2000")]
+
+    def blocks(self):
+        with self.connect() as db:
+            return [self.decrypt(row[0]) for row in db.execute("SELECT payload FROM busy_blocks ORDER BY start LIMIT 5000")]

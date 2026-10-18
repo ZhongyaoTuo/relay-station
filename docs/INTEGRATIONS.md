@@ -120,3 +120,25 @@ RELAY_ADMIN_PASSWORD=<至少12位的初始密码>
 如果管理界面仍只在本机访问、仅代理飞书回调，保持 `RELAY_ORIGIN=http://localhost:8765`；飞书回调 URL 在平台中填写实际的公共 HTTPS 地址，界面显示的本机建议地址可忽略。
 
 Windows 中保护数据目录时，请检查 NTFS ACL；`chmod(0600)` 的权限语义在 Windows 与 Unix 不完全相同。密钥与数据库同机保存只提供内容静态加密，不等于硬件密钥保护。
+
+
+## Canvas / 学校作业平台
+
+1. 确认学校允许个人 API 访问，按学校要求创建 Access Token。不能创建时先用通知邮件、手动事项与 CSV 课表。
+2. 在“连接中心 → Canvas”填写学校 HTTPS 根地址（例如 `https://your-school.instructure.com`），不要填写登录页面路径或学校密码。
+3. 填写授权令牌并点击“验证并保存”。验证读取当前用户资料和在读课程，凭据加密保存在本机且不回显。
+4. 可按课程 ID 限定范围，并选择是否同步未来 14 天课程日历。点击同步，作业进入“待确认”。检查个人截止与条件后再启用提醒和排程。
+5. 同步发现截止变化时保留原始个人记录与重要程度，显示来源最新日期，暂停截止提醒直至重新确认。发现已提交状态会提示核对，不代替用户标记本地完成。
+
+此适配器只调用 GET，不提交作业、上传文件或修改成绩；个人令牌自身可能有更广权限。分页不会向其他站点转发令牌，也不跟随重定向。单次最多 25 门课程、每接口最多 3 页；达到上限会提示缩小范围。忽略未发布作业及超过 30 天的旧截止，首次不导入已提交作业。日历忽略全天事件，只将有起止时间的课程事件作为占用。学校其他教学系统需要独立适配器。
+
+在“我的控制台”可以暂停同步，或继续接收邮箱消息但关闭自动拾取。暂停不会删除历史事项和提醒；如需取消提醒须修改事项或课程设置。断开连接仅删除本地令牌，请同时在 Canvas 侧撤销。
+
+CSV 课表使用 UTF-8，列为 `title,start,end,location`，每次最多 200 行，时间必须包含时区。示例：
+
+```csv
+title,start,end,location
+概率论,2026-11-02T09:00:00+08:00,2026-11-02T10:30:00+08:00,A203
+```
+
+参考：[Canvas 授权](https://developerdocs.instructure.com/services/canvas/oauth2/file.oauth)、[作业接口](https://developerdocs.instructure.com/services/canvas/resources/assignments)、[课程日历接口](https://developerdocs.instructure.com/services/canvas/resources/calendar_events)。

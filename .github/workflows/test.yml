@@ -20,6 +20,7 @@ jobs:
         with:
           node-version: '22'
       - run: node --check static/app.js
+      - run: node --check static/organizer.js
   container:
     runs-on: ubuntu-latest
     steps:

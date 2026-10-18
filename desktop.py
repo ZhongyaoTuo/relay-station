@@ -186,8 +186,9 @@ class Runtime:
         result = {"health": json.loads(get("/health")), "session": json.loads(get("/api/session")),
                   "frontend": "Relay" in get("/").decode(),
                   "script": len(get("/static/app.js")) > 1000,
+                  "organizer_script": "memoProfile" in get("/static/organizer.js").decode(),
                   "persistent_data": str(self.directory), "frozen": bool(getattr(sys, "frozen", False))}
-        result["ok"] = all((result["health"]["ok"], result["frontend"], result["script"]))
+        result["ok"] = all((result["health"]["ok"], result["frontend"], result["script"], result["organizer_script"]))
         return result
 
     def webview(self, gui_test=False):
@@ -238,6 +239,13 @@ class Runtime:
                 self.window.evaluate_js("document.querySelector('#services-form [name=google_client_id]').value='desktop-smoke-client'; document.querySelector('#services-form [name=google_client_secret]').value='synthetic-test-secret'; document.querySelector('#services-form').requestSubmit(); true")
                 wait_js("!document.querySelector('#modal[open]')")
                 result["service_saved"] = self.app.state.store.get("services", {}).get("google_client_id") == "desktop-smoke-client"
+                self.window.evaluate_js("location.hash='items'; true")
+                wait_js("!!document.querySelector('#main [data-act=memo-new]')")
+                self.window.evaluate_js("document.querySelector('#main [data-act=memo-new]').click(); true")
+                wait_js("!!document.querySelector('#memo-item-form')")
+                self.window.evaluate_js("document.querySelector('#memo-item-form [name=title]').value='Desktop memo smoke'; document.querySelector('#memo-item-form [name=importance_override]').value='critical'; document.querySelector('#memo-item-form').requestSubmit(); true")
+                wait_js("document.querySelector('#main .memo-title')?.textContent.includes('Desktop memo smoke')")
+                result["memo_saved"] = any(i["title"]=="Desktop memo smoke" and i["importance_override"]=="critical" for i in self.app.state.store.items())
                 result["tray"] = bool(self.tray)
                 if self.tray:
                     # Fire the same closing event as the window's X button. It must
@@ -245,7 +253,7 @@ class Runtime:
                     result["close_to_tray"] = self.window.events.closing.set()
                     result["background_alive"] = self.smoke()["ok"]
                     self.window.show()
-                result["gui_ok"] = all((result["gui_ok"], result["initialized"], result["service_saved"], result["tray"], result.get("close_to_tray"), result.get("background_alive")))
+                result["gui_ok"] = all((result["gui_ok"], result["initialized"], result["service_saved"], result["memo_saved"], result["tray"], result.get("close_to_tray"), result.get("background_alive")))
             except Exception as error:
                 result.update(ok=False, gui_ok=False, error=type(error).__name__)
             finally:

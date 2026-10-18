@@ -40,12 +40,13 @@ def propose(messages, existing, settings, timezone, now=None):
     busy = [(datetime.fromisoformat(t["start"]), datetime.fromisoformat(t["end"]))
             for t in existing if not t.get("done")]
     planned = {t.get("message_id") for t in existing}
+    planned_items = {t.get("item_id") for t in existing}
     proposals, unscheduled = [], []
-    candidates = [m for m in messages if m["id"] not in planned and not m.get("archived")
+    candidates = [m for m in messages if m["id"] not in (planned_items if m.get("_item") else planned) and not m.get("archived")
                   and m.get("category") != "订阅" and m.get("priority") != "low"]
     candidates.sort(key=lambda m: (m.get("priority") != "high", m.get("deadline") or "9999"))
-    duration = timedelta(minutes=settings["duration"])
     for message in candidates[:30]:
+        duration = timedelta(minutes=message.get("duration",settings["duration"]))
         selected = None
         deadline = datetime.fromisoformat(message["deadline"]) if message.get("deadline") else None
         for day_offset in range(14):
@@ -73,7 +74,8 @@ def propose(messages, existing, settings, timezone, now=None):
             continue
         start, end = selected
         busy.append(selected)
-        proposals.append({"message_id": message["id"], "title": message["title"][:200],
+        proposals.append({"message_id": None if message.get("_item") else message["id"],
+                          **({"item_id":message["id"]} if message.get("_item") else {}), "title": message["title"][:200],
                           "start": start.isoformat(), "end": end.isoformat(),
                           "priority": message["priority"], "source": message["source"]})
     return {"tasks": proposals, "unscheduled": unscheduled}
